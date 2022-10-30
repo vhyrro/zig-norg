@@ -15,7 +15,7 @@ pub const SimpleToken = struct {
     char: u8,
 };
 
-pub fn parse(allocator: std.mem.Allocator, input: []const u8) std.mem.Allocator.Error![]SimpleToken {
+pub fn tokenize(allocator: std.mem.Allocator, input: []const u8) std.mem.Allocator.Error![]SimpleToken {
     var tokens = std.ArrayList(SimpleToken).init(allocator);
     errdefer tokens.deinit();
 
@@ -41,7 +41,7 @@ pub fn parse(allocator: std.mem.Allocator, input: []const u8) std.mem.Allocator.
 test "Simple parse" {
     const input = "*Hello* {world}!";
 
-    const output = try parse(testing.allocator, input);
+    const output = try tokenize(testing.allocator, input);
 
     try testing.expectEqualSlices(SimpleToken, output, &[_]SimpleToken {
         .{ .type = .Special, .char = '*' },
