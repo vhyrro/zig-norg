@@ -1,7 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 
-pub const SimpleTokenType = union(enum) {
+pub const SimpleTokenType = enum {
     Character,
     Space,
     Newline,
@@ -43,7 +43,7 @@ test "Simple parse" {
 
     const output = try tokenize(testing.allocator, input);
 
-    try testing.expectEqualSlices(SimpleToken, output, &[_]SimpleToken {
+    try testing.expectEqualSlices(SimpleToken, output, &[_]SimpleToken{
         .{ .type = .Special, .char = '*' },
         .{ .type = .Character, .char = 'H' },
         .{ .type = .Character, .char = 'e' },
