@@ -1,10 +1,6 @@
 const std = @import("std");
 const testing = std.testing;
 
-pub const ErrorType = union(enum) {
-    Unknown,
-};
-
 pub const SimpleTokenType = union(enum) {
     Character,
     Space,
@@ -12,7 +8,6 @@ pub const SimpleTokenType = union(enum) {
     Special,
     LinkOpen,
     LinkClose,
-    Error: ErrorType,
 };
 
 pub const SimpleToken = struct {
