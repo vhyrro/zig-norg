@@ -40,7 +40,9 @@ pub const TokenData = union(enum) {
 
 pub const ParseError = error{NeedsMoreData};
 
-pub fn parse(allocator: std.mem.Allocator, input: []const u8, simpleTokens: []tokenizer.SimpleToken) ![]Token {
+pub fn parse(alloc: *std.heap.ArenaAllocator, input: []const u8, simpleTokens: []tokenizer.SimpleToken) ![]Token {
+    var allocator = alloc.allocator();
+
     var tokens = std.ArrayList(Token).init(allocator);
     errdefer tokens.deinit();
 
@@ -129,7 +131,8 @@ pub fn parse(allocator: std.mem.Allocator, input: []const u8, simpleTokens: []to
                     })
                 else if (can_be_attached_modifier and can_be_closing_modifier and unclosedAttachedMods.items.len > 0) {
                     var attached_modifier_opener = unclosedAttachedMods.orderedRemove(0);
-                    var attached_modifier_content = tokens.items[attached_modifier_opener.index..tokens.items.len];
+                    var attached_modifier_content = try allocator.alloc(Token, tokens.items.len - attached_modifier_opener.index);
+                    std.mem.copy(Token, attached_modifier_content, tokens.items[attached_modifier_opener.index..tokens.items.len]);
 
                     try tokens.replaceRange(attached_modifier_opener.index, tokens.items.len - attached_modifier_opener.index, &[_]Token{
                         Token{
@@ -141,7 +144,7 @@ pub fn parse(allocator: std.mem.Allocator, input: []const u8, simpleTokens: []to
                                 .AttachedModifier = .{
                                     .char = current.char,
                                     .type = .Bold, // TODO: make this dynamic
-                                    .content = attached_modifier_content, // <- Does this work? Or does the memory get freed?
+                                    .content = attached_modifier_content,
                                 },
                             },
                         },
@@ -173,11 +176,20 @@ test "Parse sample text" {
     ;
 
     const simpleTokens = try tokenizer.tokenize(testing.allocator, input);
-    const tokens = try parse(testing.allocator, input, simpleTokens);
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    const tokens = try parse(&arena, input, simpleTokens);
 
     // TODO: fix test
+    for (tokens) |token|
+        switch (token.data) {
+            .AttachedModifier => |data| std.debug.print("{any}\n\n", .{data.content}),
+            else => {},
+        };
+
     std.debug.print("{any}\n\n", .{tokens});
 
     testing.allocator.free(simpleTokens);
-    testing.allocator.free(tokens);
 }
