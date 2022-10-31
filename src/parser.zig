@@ -18,6 +18,11 @@ pub const LinkType = enum {
 pub const AttachedModifierType = enum {
     Bold,
     Italic,
+    Underline,
+    Superscript,
+    Subscript,
+    Strikethrough,
+    Comment,
 };
 
 pub const AttachedModifier = struct {
