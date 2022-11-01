@@ -179,8 +179,8 @@ pub fn parse(alloc: *std.heap.ArenaAllocator, input: []const u8, simpleTokens: [
                     });
                 } else if (can_be_attached_modifier and can_be_closing_modifier and unclosedAttachedMods.items.len > 0) {
                     var attached_modifier_opener = unclosedAttachedMods.orderedRemove(0);
-                    var attached_modifier_content = try allocator.alloc(Token, tokens.items.len - attached_modifier_opener.index);
-                    std.mem.copy(Token, attached_modifier_content, tokens.items[attached_modifier_opener.index..tokens.items.len]);
+                    var attached_modifier_content = try allocator.alloc(Token, tokens.items.len - attached_modifier_opener.index - 1);
+                    std.mem.copy(Token, attached_modifier_content, tokens.items[attached_modifier_opener.index + 1 .. tokens.items.len]);
 
                     try tokens.replaceRange(attached_modifier_opener.index, tokens.items.len - attached_modifier_opener.index, &[_]Token{
                         Token{
@@ -215,9 +215,8 @@ pub fn parse(alloc: *std.heap.ArenaAllocator, input: []const u8, simpleTokens: [
 
 test "Parse sample text" {
     // TODO: *Hello World!*/ doesn't work because the closing markup is at EOF
-    // TODO: */Hello/ world!* treats the first `/` as unclosed markup
     const input =
-        \\*/Hello world!/*
+        \\*Hello World!*/
     ;
 
     const simpleTokens = try tokenizer.tokenize(testing.allocator, input);
