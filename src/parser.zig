@@ -24,6 +24,7 @@ pub const AttachedModifierType = enum {
     Subscript,
     Strikethrough,
     Comment,
+    Spoiler,
 };
 
 pub const AttachedModifier = struct {
@@ -198,6 +199,30 @@ pub fn parse(alloc: *std.heap.ArenaAllocator, input: []const u8, simpleTokens: [
                         },
                     });
                 }
+                else {
+                    // If the thing cannot be an attached mod then try merge it with the previous word
+                    // or create a new Word object
+                    var prev = &tokens.items[tokens.items.len - 1];
+
+                    switch (prev.data) {
+                        .Word => |*word| {
+                            prev.range.end += 1;
+                            word.* = input[prev.range.start..prev.range.end];
+                        },
+                        else => {
+                            try tokens.append(.{
+                                .range = .{
+                                    .start = start,
+                                    .end = start + 1,
+                                },
+
+                                .data = .{
+                                    .Word = input[start..start + 1],
+                                },
+                            });
+                        },
+                    }
+                }
             },
             else => {},
         }
@@ -214,7 +239,7 @@ pub fn parse(alloc: *std.heap.ArenaAllocator, input: []const u8, simpleTokens: [
 }
 
 test "Parse sample text" {
-    // TODO: *Hello World!*/ doesn't work because the closing markup is at EOF
+    // TODO: Breaks on `*Hello World!*/` because of the `!`
     const input =
         \\*Hello World!*/
     ;

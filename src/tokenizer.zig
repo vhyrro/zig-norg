@@ -26,7 +26,7 @@ pub fn tokenize(allocator: std.mem.Allocator, input: []const u8) std.mem.Allocat
             .type = switch (input[i]) {
                 '\t', ' ' => .Space,
                 '\n' => .Newline,
-                '*', '/', '_', '^', ',', '-', '%' => .Special,
+                '*', '/', '_', '^', ',', '-', '%', '!', => .Special,
                 '{' => .LinkOpen,
                 '}' => .LinkClose,
                 else => .Character,
@@ -59,7 +59,7 @@ test "Simple parse" {
         .{ .type = .Character, .char = 'l' },
         .{ .type = .Character, .char = 'd' },
         .{ .type = .LinkClose, .char = '}' },
-        .{ .type = .Character, .char = '!' },
+        .{ .type = .Special, .char = '!' },
     });
 
     testing.allocator.free(output);
