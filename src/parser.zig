@@ -1,6 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 const tokenizer = @import("tokenizer.zig");
+const utils = @import("utils.zig");
 
 pub const Token = struct {
     range: struct {
@@ -118,9 +119,28 @@ pub fn parse(alloc: *std.heap.ArenaAllocator, input: []const u8, simpleTokens: [
             },
             .Special => {
                 // Check for attached modifiers
-                const can_be_attached_modifier: bool = (i + 1 < simpleTokens.len) and (simpleTokens[i + 1].char != current.char);
-                const can_be_opening_modifier: bool = i > 0 and (simpleTokens[i - 1].type == .Space or simpleTokens[i - 1].type == .Newline);
-                const can_be_closing_modifier: bool = i + 1 < simpleTokens.len and (simpleTokens[i + 1].type == .Space or simpleTokens[i + 1].type == .Newline);
+                const can_be_attached_modifier: bool = b: {
+                    if (i + 1 < simpleTokens.len)
+                        break :b simpleTokens[i + 1].char != current.char
+                    else
+                        break :b true;
+                };
+
+                const can_be_opening_modifier: bool = b: {
+                    if (i == 0)
+                        break :b true
+                    else {
+                        const prev = simpleTokens[i - 1];
+                        break :b prev.type == .Space or prev.type == .Newline or utils.isPunctuation(prev.char);
+                    }
+                };
+
+                const can_be_closing_modifier: bool = b: {
+                    if (i + 1 < simpleTokens.len) {
+                        const next = simpleTokens[i + 1];
+                        break :b (next.type == .Space or next.type == .Newline or utils.isPunctuation(next.char));
+                    } else break :b true;
+                };
 
                 var unclosedAttachedMods = (try states.getOrPutValue(current.char, std.ArrayList(UnclosedAttachedModifier).init(allocator))).value_ptr;
 
@@ -175,19 +195,22 @@ pub fn parse(alloc: *std.heap.ArenaAllocator, input: []const u8, simpleTokens: [
 }
 
 test "Parse sample text" {
+    // TODO: EOF after closing modifier doesn't work
+    // TODO: `,*up*` doesn't work because `,` is unclosed.
+    // TODO: Test */this/*.
     const input =
-        \\What's *up*
-        \\beijing.
+        \\What's *up
+        \\beijing*.
     ;
 
     const simpleTokens = try tokenizer.tokenize(testing.allocator, input);
+    defer testing.allocator.free(simpleTokens);
 
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
 
     const tokens = try parse(&arena, input, simpleTokens);
 
-    // TODO: fix test
     for (tokens) |token|
         switch (token.data) {
             .AttachedModifier => |data| std.debug.print("{any}\n\n", .{data.content}),
@@ -195,6 +218,4 @@ test "Parse sample text" {
         };
 
     std.debug.print("{any}\n\n", .{tokens});
-
-    testing.allocator.free(simpleTokens);
 }
