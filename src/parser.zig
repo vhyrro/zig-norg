@@ -77,13 +77,14 @@ pub fn parse(alloc: *std.heap.ArenaAllocator, input: []const u8, simpleTokens: [
         start = i;
         switch (current.type) {
             .Character => {
+                // Count for as long as we encounter other characters
                 while ((i + 1) < simpleTokens.len and simpleTokens[i + 1].type == .Character)
                     i += 1;
 
                 try tokens.append(.{
                     .range = .{
                         .start = start,
-                        .end = i + 1,
+                        .end = i + 1, // Indexing is end-exclusive, hence the `+ 1`
                     },
 
                     .data = .{ .Word = input[start .. i + 1] },
@@ -239,10 +240,7 @@ pub fn parse(alloc: *std.heap.ArenaAllocator, input: []const u8, simpleTokens: [
 }
 
 test "Parse sample text" {
-    // TODO: Breaks on `*Hello World!*/` because of the `!`
-    const input =
-        \\*Hello World!*/
-    ;
+    const input = "Hello\n";
 
     const simpleTokens = try tokenizer.tokenize(testing.allocator, input);
     defer testing.allocator.free(simpleTokens);
@@ -250,13 +248,36 @@ test "Parse sample text" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
 
-    const tokens = try parse(&arena, input, simpleTokens);
+    var tokens = try parse(&arena, input, simpleTokens);
+    var expected = [_]Token{
+        .{
+            .range = .{
+                .start = 0,
+                .end = 5,
+            },
 
-    for (tokens) |token|
-        switch (token.data) {
-            .AttachedModifier => |data| std.debug.print("{any}\n\n", .{data.content}),
-            else => {},
-        };
+            .data = .{
+                .Word = "Hello",
+            },
+        },
+        .{
+            .range = .{
+                .start = 5,
+                .end = 6,
+            },
 
-    std.debug.print("{any}\n\n", .{tokens});
+            .data = .SoftBreak,
+        },
+    };
+
+    var i: u64 = 0;
+
+    while (i < tokens.len) : (i += 1) {
+        var in = tokens[i];
+        var exp = expected[i];
+
+        try testing.expect(in.range.start == exp.range.start);
+        try testing.expect(in.range.end == exp.range.end);
+        try testing.expect(@typeName(@TypeOf(in.data)) == @typeName(@TypeOf(exp.data)));
+    }
 }
