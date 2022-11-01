@@ -61,8 +61,8 @@ pub fn parse(alloc: *std.heap.ArenaAllocator, input: []const u8, simpleTokens: [
         start: u64,
     };
 
-    var states = std.AutoHashMap(u8, std.ArrayList(UnclosedAttachedModifier)).init(allocator);
-    defer states.deinit();
+    var unclosedAttachedModifierMap = std.AutoHashMap(u8, std.ArrayList(UnclosedAttachedModifier)).init(allocator);
+    defer unclosedAttachedModifierMap.deinit();
 
     var is_on_new_line: bool = true;
 
@@ -102,8 +102,15 @@ pub fn parse(alloc: *std.heap.ArenaAllocator, input: []const u8, simpleTokens: [
             .Newline => {
                 var is_paragraph_break: bool = (i + 1) < simpleTokens.len and simpleTokens[i + 1].type == .Newline;
 
-                if (is_paragraph_break)
+                if (is_paragraph_break) {
                     i += 1;
+
+                    // Go through every attached modifier and clear it.
+                    var attachedModIterator = unclosedAttachedModifierMap.iterator();
+
+                    while (attachedModIterator.next()) |kv|
+                        kv.value_ptr.clearAndFree();
+                }
 
                 try tokens.append(.{
                     .range = .{
@@ -142,7 +149,7 @@ pub fn parse(alloc: *std.heap.ArenaAllocator, input: []const u8, simpleTokens: [
                     } else break :b true;
                 };
 
-                var unclosedAttachedMods = (try states.getOrPutValue(current.char, std.ArrayList(UnclosedAttachedModifier).init(allocator))).value_ptr;
+                var unclosedAttachedMods = (try unclosedAttachedModifierMap.getOrPutValue(current.char, std.ArrayList(UnclosedAttachedModifier).init(allocator))).value_ptr;
 
                 if (can_be_attached_modifier and can_be_opening_modifier)
                     try unclosedAttachedMods.append(.{
@@ -182,7 +189,7 @@ pub fn parse(alloc: *std.heap.ArenaAllocator, input: []const u8, simpleTokens: [
         is_on_new_line = false;
     }
 
-    var iter = states.iterator();
+    var iter = unclosedAttachedModifierMap.iterator();
 
     while (iter.next()) |kv| {
         for (kv.value_ptr.items) |unclosedModifier|
@@ -195,12 +202,14 @@ pub fn parse(alloc: *std.heap.ArenaAllocator, input: []const u8, simpleTokens: [
 }
 
 test "Parse sample text" {
-    // TODO: EOF after closing modifier doesn't work
     // TODO: `,*up*` doesn't work because `,` is unclosed.
     // TODO: Test */this/*.
+    // TODO: *Hello World!* doesn't work
     const input =
         \\What's *up
+        \\
         \\beijing*.
+        \\*Hi world*.
     ;
 
     const simpleTokens = try tokenizer.tokenize(testing.allocator, input);
