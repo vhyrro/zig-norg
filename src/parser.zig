@@ -39,12 +39,16 @@ pub const TokenData = union(enum) {
     ParagraphBreak,
     Link: struct {
         type: LinkType,
-        content: []const u8,
+        content: []Token,
+    },
+    UnclosedAttachedModifier: struct {
+        isOpening: bool,
+        char: u8,
     },
     AttachedModifier: AttachedModifier,
 };
 
-pub const ParseError = error{NeedsMoreData};
+pub const NeedsMoreData = error{UnclosedLink};
 
 pub fn parse(alloc: *std.heap.ArenaAllocator, input: []const u8, simpleTokens: []tokenizer.SimpleToken) ![]Token {
     var allocator = alloc.allocator();
@@ -138,20 +142,20 @@ pub fn parse(alloc: *std.heap.ArenaAllocator, input: []const u8, simpleTokens: [
                         break :b true
                     else {
                         const prev = simpleTokens[i - 1];
-                        break :b prev.type == .Space or prev.type == .Newline or utils.isPunctuation(prev.char);
+                        break :b (prev.type == .Space or prev.type == .Newline or utils.isPunctuation(prev.char)) and (i + 1 < simpleTokens.len and simpleTokens[i + 1].type == .Character);
                     }
                 };
 
                 const can_be_closing_modifier: bool = b: {
                     if (i + 1 < simpleTokens.len) {
                         const next = simpleTokens[i + 1];
-                        break :b (next.type == .Space or next.type == .Newline or utils.isPunctuation(next.char));
+                        break :b (next.type == .Space or next.type == .Newline or utils.isPunctuation(next.char)) and (i > 0 and simpleTokens[i - 1].type == .Character);
                     } else break :b true;
                 };
 
                 var unclosedAttachedMods = (try unclosedAttachedModifierMap.getOrPutValue(current.char, std.ArrayList(UnclosedAttachedModifier).init(allocator))).value_ptr;
 
-                if (can_be_attached_modifier and can_be_opening_modifier)
+                if (can_be_attached_modifier and can_be_opening_modifier) {
                     try unclosedAttachedMods.append(.{
                         .attachedModifier = .{
                             .char = current.char,
@@ -160,8 +164,20 @@ pub fn parse(alloc: *std.heap.ArenaAllocator, input: []const u8, simpleTokens: [
                         },
                         .index = tokens.items.len,
                         .start = start,
-                    })
-                else if (can_be_attached_modifier and can_be_closing_modifier and unclosedAttachedMods.items.len > 0) {
+                    });
+                    try tokens.append(.{
+                        .range = .{
+                            .start = start,
+                            .end = start + 1,
+                        },
+                        .data = .{
+                            .UnclosedAttachedModifier = .{
+                                .isOpening = true,
+                                .char = current.char,
+                            },
+                        },
+                    });
+                } else if (can_be_attached_modifier and can_be_closing_modifier and unclosedAttachedMods.items.len > 0) {
                     var attached_modifier_opener = unclosedAttachedMods.orderedRemove(0);
                     var attached_modifier_content = try allocator.alloc(Token, tokens.items.len - attached_modifier_opener.index);
                     std.mem.copy(Token, attached_modifier_content, tokens.items[attached_modifier_opener.index..tokens.items.len]);
@@ -191,25 +207,17 @@ pub fn parse(alloc: *std.heap.ArenaAllocator, input: []const u8, simpleTokens: [
 
     var iter = unclosedAttachedModifierMap.iterator();
 
-    while (iter.next()) |kv| {
-        for (kv.value_ptr.items) |unclosedModifier|
-            tokens.items[unclosedModifier.index].data = .{ .Word = &.{unclosedModifier.attachedModifier.char} };
-
+    while (iter.next()) |kv|
         kv.value_ptr.deinit();
-    }
 
     return tokens.toOwnedSlice();
 }
 
 test "Parse sample text" {
-    // TODO: `,*up*` doesn't work because `,` is unclosed.
-    // TODO: Test */this/*.
-    // TODO: *Hello World!* doesn't work
+    // TODO: *Hello World!*/ doesn't work because the closing markup is at EOF
+    // TODO: */Hello/ world!* treats the first `/` as unclosed markup
     const input =
-        \\What's *up
-        \\
-        \\beijing*.
-        \\*Hi world*.
+        \\*/Hello world!/*
     ;
 
     const simpleTokens = try tokenizer.tokenize(testing.allocator, input);
