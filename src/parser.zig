@@ -69,32 +69,31 @@ pub fn parse(alloc: *std.heap.ArenaAllocator, input: []const u8, simpleTokens: [
     var unclosedAttachedModifierMap = std.AutoHashMap(u8, std.ArrayList(UnclosedAttachedModifier)).init(allocator);
     defer unclosedAttachedModifierMap.deinit();
 
-    var is_on_new_line: bool = true;
-
     while (i < simpleTokens.len) : (i += 1) {
         const current = simpleTokens[i];
 
         start = i;
-        switch (current.type) {
-            .Character => {
+
+        try tokens.append(switch (current.type) {
+            .Character => b: {
                 // Count for as long as we encounter other characters
                 while ((i + 1) < simpleTokens.len and simpleTokens[i + 1].type == .Character)
                     i += 1;
 
-                try tokens.append(.{
+                break :b Token{
                     .range = .{
                         .start = start,
                         .end = i + 1, // Indexing is end-exclusive, hence the `+ 1`
                     },
 
                     .data = .{ .Word = input[start .. i + 1] },
-                });
+                };
             },
-            .Space => {
+            .Space => b: {
                 while ((i + 1) < simpleTokens.len and simpleTokens[i + 1].type == .Space)
                     i += 1;
 
-                try tokens.append(.{
+                break :b Token{
                     .range = .{
                         .start = start,
                         .end = i + 1,
@@ -103,9 +102,9 @@ pub fn parse(alloc: *std.heap.ArenaAllocator, input: []const u8, simpleTokens: [
                     .data = .{
                         .Space = @truncate(u32, i - start + 1),
                     },
-                });
+                };
             },
-            .Newline => {
+            .Newline => b: {
                 var is_paragraph_break: bool = (i + 1) < simpleTokens.len and simpleTokens[i + 1].type == .Newline;
 
                 if (is_paragraph_break) {
@@ -118,41 +117,38 @@ pub fn parse(alloc: *std.heap.ArenaAllocator, input: []const u8, simpleTokens: [
                         kv.value_ptr.clearAndFree();
                 }
 
-                try tokens.append(.{
+                break :b Token{
                     .range = .{
                         .start = start,
                         .end = i + 1,
                     },
 
                     .data = if (is_paragraph_break) .ParagraphBreak else .SoftBreak,
-                });
-
-                is_on_new_line = true;
-                continue;
+                };
             },
-            .Special => {
+            .Special => b: {
                 // Check for attached modifiers
-                const can_be_attached_modifier: bool = b: {
+                const can_be_attached_modifier: bool = cond: {
                     if (i + 1 < simpleTokens.len)
-                        break :b simpleTokens[i + 1].char != current.char
+                        break :cond simpleTokens[i + 1].char != current.char
                     else
-                        break :b true;
+                        break :cond true;
                 };
 
-                const can_be_opening_modifier: bool = b: {
+                const can_be_opening_modifier: bool = cond: {
                     if (i == 0)
-                        break :b true
+                        break :cond true
                     else {
                         const prev = simpleTokens[i - 1];
-                        break :b (prev.type == .Space or prev.type == .Newline or utils.isPunctuation(prev.char)) and (i + 1 < simpleTokens.len and simpleTokens[i + 1].type == .Character);
+                        break :cond (prev.type == .Space or prev.type == .Newline or utils.isPunctuation(prev.char)) and (i + 1 < simpleTokens.len and simpleTokens[i + 1].type == .Character);
                     }
                 };
 
-                const can_be_closing_modifier: bool = b: {
+                const can_be_closing_modifier: bool = cond: {
                     if (i + 1 < simpleTokens.len) {
                         const next = simpleTokens[i + 1];
-                        break :b (next.type == .Space or next.type == .Newline or utils.isPunctuation(next.char)) and (i > 0 and simpleTokens[i - 1].type == .Character);
-                    } else break :b true;
+                        break :cond (next.type == .Space or next.type == .Newline or utils.isPunctuation(next.char)) and (i > 0 and simpleTokens[i - 1].type == .Character);
+                    } else break :cond true;
                 };
 
                 var unclosedAttachedMods = (try unclosedAttachedModifierMap.getOrPutValue(current.char, std.ArrayList(UnclosedAttachedModifier).init(allocator))).value_ptr;
@@ -167,7 +163,8 @@ pub fn parse(alloc: *std.heap.ArenaAllocator, input: []const u8, simpleTokens: [
                         .index = tokens.items.len,
                         .start = start,
                     });
-                    try tokens.append(.{
+
+                    break :b Token{
                         .range = .{
                             .start = start,
                             .end = start + 1,
@@ -178,7 +175,7 @@ pub fn parse(alloc: *std.heap.ArenaAllocator, input: []const u8, simpleTokens: [
                                 .char = current.char,
                             },
                         },
-                    });
+                    };
                 } else if (can_be_attached_modifier and can_be_closing_modifier and unclosedAttachedMods.items.len > 0) {
                     var attached_modifier_opener = unclosedAttachedMods.orderedRemove(0);
                     var attached_modifier_content = try allocator.alloc(Token, tokens.items.len - attached_modifier_opener.index - 1);
@@ -199,8 +196,7 @@ pub fn parse(alloc: *std.heap.ArenaAllocator, input: []const u8, simpleTokens: [
                             },
                         },
                     });
-                }
-                else {
+                } else {
                     // If the thing cannot be an attached mod then try merge it with the previous word
                     // or create a new Word object
                     var prev = &tokens.items[tokens.items.len - 1];
@@ -211,24 +207,25 @@ pub fn parse(alloc: *std.heap.ArenaAllocator, input: []const u8, simpleTokens: [
                             word.* = input[prev.range.start..prev.range.end];
                         },
                         else => {
-                            try tokens.append(.{
+                            break :b Token{
                                 .range = .{
                                     .start = start,
                                     .end = start + 1,
                                 },
 
                                 .data = .{
-                                    .Word = input[start..start + 1],
+                                    .Word = input[start .. start + 1],
                                 },
-                            });
+                            };
                         },
                     }
                 }
-            },
-            else => {},
-        }
 
-        is_on_new_line = false;
+                continue;
+            },
+
+            else => continue,
+        });
     }
 
     var iter = unclosedAttachedModifierMap.iterator();
