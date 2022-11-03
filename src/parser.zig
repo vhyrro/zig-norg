@@ -236,9 +236,9 @@ pub fn parse(alloc: *std.heap.ArenaAllocator, input: []const u8, simpleTokens: [
     return tokens.toOwnedSlice();
 }
 
-test "Parse sample text" {
-    const input = "Hello\n";
+// -----------------------------------------------------------------------
 
+fn testInput(input: []const u8, comptime size: comptime_int, comptime expected: [size]Token) !void {
     const simpleTokens = try tokenizer.tokenize(testing.allocator, input);
     defer testing.allocator.free(simpleTokens);
 
@@ -246,26 +246,6 @@ test "Parse sample text" {
     defer arena.deinit();
 
     var tokens = try parse(&arena, input, simpleTokens);
-    var expected = [_]Token{
-        .{
-            .range = .{
-                .start = 0,
-                .end = 5,
-            },
-
-            .data = .{
-                .Word = "Hello",
-            },
-        },
-        .{
-            .range = .{
-                .start = 5,
-                .end = 6,
-            },
-
-            .data = .SoftBreak,
-        },
-    };
 
     var i: u64 = 0;
 
@@ -277,4 +257,26 @@ test "Parse sample text" {
         try testing.expect(in.range.end == exp.range.end);
         try testing.expect(@typeName(@TypeOf(in.data)) == @typeName(@TypeOf(exp.data)));
     }
+}
+
+test "Parse regular sample text" {
+    const input = "Hello\n\n";
+    try testInput(input, 2, [2]Token{
+        .{
+            .range = .{
+                .start = 0,
+                .end = 5,
+            },
+            .data = .{
+                .Word = "Hello",
+            },
+        },
+        .{
+            .range = .{
+                .start = 5,
+                .end = 7,
+            },
+            .data = .ParagraphBreak,
+        },
+    });
 }
