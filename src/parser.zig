@@ -249,7 +249,7 @@ fn testInput(input: []const u8, comptime size: comptime_int, comptime expected: 
 
     var i: u64 = 0;
 
-    while (i < tokens.len) : (i += 1) {
+    while (i < size) : (i += 1) {
         var in = tokens[i];
         var exp = expected[i];
 
@@ -277,6 +277,42 @@ test "Parse regular sample text" {
                 .end = 7,
             },
             .data = .ParagraphBreak,
+        },
+    });
+}
+
+test "Parse multi-line text" {
+    const input =
+        \\Hello
+        \\world!
+    ;
+
+    try testInput(input, 3, [3]Token{
+        .{
+            .range = .{
+                .start = 0,
+                .end = 5,
+            },
+            .data = .{
+                .Word = "Hello",
+            },
+        },
+        .{
+            .range = .{
+                .start = 5,
+                .end = 6,
+            },
+            .data = .SoftBreak,
+        },
+        .{
+            .range = .{
+                .start = 6,
+                .end = 12,
+            },
+
+            .data = .{
+                .Word = "world!",
+            },
         },
     });
 }
