@@ -35,21 +35,72 @@ pub const AttachedModifier = struct {
 
 pub const TokenData = union(enum) {
     Word: []const u8,
-    Space: u32,
+    Space,
     SoftBreak,
     ParagraphBreak,
     Link: struct {
         type: LinkType,
         content: []Token,
     },
-    UnclosedAttachedModifier: struct {
+    AttachedModifier: struct {
         isOpening: bool,
+        closingModifierIndex: ?u64,
         char: u8,
     },
-    AttachedModifier: AttachedModifier,
 };
 
 pub const NeedsMoreData = error{UnclosedLink};
+
+// ---------------------------------------------------------------------------------------------------------------
+
+fn parseConsecutiveTokens(increment: *u64, simpleTokens: []tokenizer.SimpleToken, targetType: tokenizer.SimpleTokenType) Token {
+    const start = increment.*;
+
+    while ((increment.* + 1) < simpleTokens.len and simpleTokens[increment.* + 1].type == targetType)
+        increment.* += 1;
+
+    return .{
+        .range = .{
+            .start = start,
+            .end = increment.* + 1,
+        },
+
+        .data = undefined,
+    };
+}
+
+fn parseWord(increment: *u64, simpleTokens: []tokenizer.SimpleToken, input: []const u8) Token {
+    var token = parseConsecutiveTokens(increment, simpleTokens, .Character);
+
+    token.data = .{
+        .Word = input[token.range.start..token.range.end],
+    };
+
+    return token;
+}
+
+fn parseWhitespace(increment: *u64, simpleTokens: []tokenizer.SimpleToken) Token {
+    var token = parseConsecutiveTokens(increment, simpleTokens, .Space);
+    token.data = .Space;
+
+    return token;
+}
+
+fn oneOrTwo(increment: *u64, simpleTokens: []tokenizer.SimpleToken, typeToMatch: tokenizer.SimpleTokenType, oneType: TokenData, twoType: TokenData) Token {
+    const has_second_match: bool = (increment.* + 1) < simpleTokens.len and simpleTokens[increment.* + 1].type == toTypeMatch;
+
+    if (has_second_match)
+        increment.* += 1;
+
+    return .{
+        .range = .{
+            .start = start,
+            .end = increment.* + 1,
+        },
+
+        .data = if (has_second_match) oneType else twoType,
+    };
+}
 
 pub fn parse(alloc: *std.heap.ArenaAllocator, input: []const u8, simpleTokens: []tokenizer.SimpleToken) ![]Token {
     var allocator = alloc.allocator();
@@ -60,14 +111,16 @@ pub fn parse(alloc: *std.heap.ArenaAllocator, input: []const u8, simpleTokens: [
     var i: u64 = 0;
     var start: u64 = 0;
 
-    const UnclosedAttachedModifier = struct {
-        attachedModifier: AttachedModifier,
-        index: u64,
-        start: u64,
-    };
+    // A hashmap of a character -> indexes into the simpleTokens slice
+    var unclosedAttachedModifierMap = std.AutoHashMap(u8, std.ArrayList(u64)).init(allocator);
+    defer {
+        var iter = unclosedAttachedModifierMap.iterator();
 
-    var unclosedAttachedModifierMap = std.AutoHashMap(u8, std.ArrayList(UnclosedAttachedModifier)).init(allocator);
-    defer unclosedAttachedModifierMap.deinit();
+        while (iter.next()) |kv|
+            kv.value_ptr.deinit();
+
+        unclosedAttachedModifierMap.deinit();
+    }
 
     while (i < simpleTokens.len) : (i += 1) {
         const current = simpleTokens[i];
@@ -75,41 +128,14 @@ pub fn parse(alloc: *std.heap.ArenaAllocator, input: []const u8, simpleTokens: [
         start = i;
 
         try tokens.append(switch (current.type) {
-            .Character => b: {
-                // Count for as long as we encounter other characters
-                while ((i + 1) < simpleTokens.len and simpleTokens[i + 1].type == .Character)
-                    i += 1;
-
-                break :b Token{
-                    .range = .{
-                        .start = start,
-                        .end = i + 1, // Indexing is end-exclusive, hence the `+ 1`
-                    },
-
-                    .data = .{ .Word = input[start .. i + 1] },
-                };
-            },
-            .Space => b: {
-                while ((i + 1) < simpleTokens.len and simpleTokens[i + 1].type == .Space)
-                    i += 1;
-
-                break :b Token{
-                    .range = .{
-                        .start = start,
-                        .end = i + 1,
-                    },
-
-                    .data = .{
-                        .Space = @truncate(u32, i - start + 1),
-                    },
-                };
-            },
+            // TODO(vhyrro): Instead of passing &i create a custom iterator class that implements
+            // peek() functions etc.
+            .Character => parseWord(&i, simpleTokens, input),
+            .Space => parseWhitespace(&i, simpleTokens),
             .Newline => b: {
-                var is_paragraph_break: bool = (i + 1) < simpleTokens.len and simpleTokens[i + 1].type == .Newline;
+                const token = oneOrTwo(&i, simpleTokens, .Newline, .SoftBreak, .ParagraphBreak);
 
-                if (is_paragraph_break) {
-                    i += 1;
-
+                if (token.type == .ParagraphBreak) {
                     // Go through every attached modifier and clear it.
                     var attachedModIterator = unclosedAttachedModifierMap.iterator();
 
@@ -117,14 +143,7 @@ pub fn parse(alloc: *std.heap.ArenaAllocator, input: []const u8, simpleTokens: [
                         kv.value_ptr.clearAndFree();
                 }
 
-                break :b Token{
-                    .range = .{
-                        .start = start,
-                        .end = i + 1,
-                    },
-
-                    .data = if (is_paragraph_break) .ParagraphBreak else .SoftBreak,
-                };
+                break :b token;
             },
             .Special => b: {
                 // Check for attached modifiers
@@ -151,18 +170,10 @@ pub fn parse(alloc: *std.heap.ArenaAllocator, input: []const u8, simpleTokens: [
                     } else break :cond true;
                 };
 
-                var unclosedAttachedMods = (try unclosedAttachedModifierMap.getOrPutValue(current.char, std.ArrayList(UnclosedAttachedModifier).init(allocator))).value_ptr;
+                var unclosedAttachedMods = (try unclosedAttachedModifierMap.getOrPutValue(current.char, std.ArrayList(u64).init(allocator))).value_ptr;
 
                 if (can_be_attached_modifier and can_be_opening_modifier) {
-                    try unclosedAttachedMods.append(.{
-                        .attachedModifier = .{
-                            .char = current.char,
-                            .type = .Bold, // TODO: Make dynamic
-                            .content = undefined,
-                        },
-                        .index = tokens.items.len,
-                        .start = start,
-                    });
+                    try unclosedAttachedMods.append(tokens.items.len);
 
                     break :b Token{
                         .range = .{
@@ -170,33 +181,31 @@ pub fn parse(alloc: *std.heap.ArenaAllocator, input: []const u8, simpleTokens: [
                             .end = start + 1,
                         },
                         .data = .{
-                            .UnclosedAttachedModifier = .{
+                            .AttachedModifier = .{
                                 .isOpening = true,
+                                .closingModifierIndex = null,
                                 .char = current.char,
                             },
                         },
                     };
-                } else if (can_be_attached_modifier and can_be_closing_modifier and unclosedAttachedMods.items.len > 0) {
-                    var attached_modifier_opener = unclosedAttachedMods.orderedRemove(0);
-                    var attached_modifier_content = try allocator.alloc(Token, tokens.items.len - attached_modifier_opener.index - 1);
-                    std.mem.copy(Token, attached_modifier_content, tokens.items[attached_modifier_opener.index + 1 .. tokens.items.len]);
+                } else if (can_be_attached_modifier and can_be_closing_modifier) {
+                    const attachedModifierIndex = if (unclosedAttachedMods.items.len > 0) unclosedAttachedMods.orderedRemove(0) else null;
 
-                    try tokens.replaceRange(attached_modifier_opener.index, tokens.items.len - attached_modifier_opener.index, &[_]Token{
-                        Token{
-                            .range = .{
-                                .start = attached_modifier_opener.start,
-                                .end = i,
-                            },
-                            .data = .{
-                                .AttachedModifier = .{
-                                    .char = current.char,
-                                    .type = .Bold, // TODO: make this dynamic
-                                    .content = attached_modifier_content,
-                                },
+                    break :b Token{
+                        .range = .{
+                            .start = start,
+                            .end = start + 1,
+                        },
+
+                        .data = .{
+                            .AttachedModifier = .{
+                                .isOpening = false,
+                                .closingModifierIndex = attachedModifierIndex,
+                                .char = current.char,
                             },
                         },
-                    });
-                } else {
+                    };
+                } else { // TODO: verify if this is even needed
                     // If the thing cannot be an attached mod then try merge it with the previous word
                     // or create a new Word object
                     var prev = &tokens.items[tokens.items.len - 1];
@@ -205,6 +214,7 @@ pub fn parse(alloc: *std.heap.ArenaAllocator, input: []const u8, simpleTokens: [
                         .Word => |*word| {
                             prev.range.end += 1;
                             word.* = input[prev.range.start..prev.range.end];
+                            continue;
                         },
                         else => {
                             break :b Token{
@@ -220,23 +230,15 @@ pub fn parse(alloc: *std.heap.ArenaAllocator, input: []const u8, simpleTokens: [
                         },
                     }
                 }
-
-                continue;
             },
 
             else => continue,
         });
     }
-
-    var iter = unclosedAttachedModifierMap.iterator();
-
-    while (iter.next()) |kv|
-        kv.value_ptr.deinit();
-
     return tokens.toOwnedSlice();
 }
 
-// -----------------------------------------------------------------------
+// -------------------------------------------------------------------------------------------------
 
 fn testInput(input: []const u8, comptime size: comptime_int, comptime expected: [size]Token) !void {
     const simpleTokens = try tokenizer.tokenize(testing.allocator, input);
@@ -261,6 +263,7 @@ fn testInput(input: []const u8, comptime size: comptime_int, comptime expected: 
 
 test "Parse regular sample text" {
     const input = "Hello\n\n";
+
     try testInput(input, 2, [2]Token{
         .{
             .range = .{
@@ -287,7 +290,7 @@ test "Parse multi-line text" {
         \\world!
     ;
 
-    try testInput(input, 3, [3]Token{
+    try testInput(input, 4, [4]Token{
         .{
             .range = .{
                 .start = 0,
@@ -307,11 +310,23 @@ test "Parse multi-line text" {
         .{
             .range = .{
                 .start = 6,
+                .end = 11,
+            },
+            .data = .{
+                .Word = "world",
+            },
+        },
+        .{
+            .range = .{
+                .start = 11,
                 .end = 12,
             },
-
             .data = .{
-                .Word = "world!",
+                .AttachedModifier = .{
+                    .isOpening = false,
+                    .closingModifierIndex = null,
+                    .char = '!',
+                },
             },
         },
     });
