@@ -1,11 +1,9 @@
 /// A struct designed to efficiently iterate over a structure of items
 const std = @import("std");
 
-pub fn TokenIterator(Token: type) type {
-    if (comptime std.meta.hasField(Token, "type"))
-        @compileError("What");
-
-    const TokenType: type = @TypeOf(Token.type);
+pub fn TokenIterator(comptime Token: type, comptime TokenType: type) type {
+    if (!@hasField(Token, "type"))
+        @compileError("Token struct must have a `type` field!");
 
     return struct {
         container: []Token,
@@ -20,14 +18,14 @@ pub fn TokenIterator(Token: type) type {
             };
         }
 
-        pub fn current(self: Self) Token {
-            if (self.index >= self.container.len)
-                @panic("Index value for iterator exceeds the length of the container. Did you manually mutate the value?");
+        pub fn current(self: Self) ?Token {
+            if (self.index == 0)
+                return null;
 
-            return self.container[self.index];
+            return self.container[self.index - 1];
         }
 
-        pub fn next(self: Self) ?Token {
+        pub fn next(self: *Self) ?Token {
             if (self.index >= self.container.len)
                 return null;
 
@@ -35,14 +33,18 @@ pub fn TokenIterator(Token: type) type {
             return self.container[self.index];
         }
 
-        pub fn nextWithType(self: Self, tokenType: TokenType) ?Token {
-            if (self.next()) |next| {
-                return if (next.type == tokenType) next else null;
+        pub fn nextWithType(self: *Self, tokenType: TokenType) ?Token {
+            if (self.peekNext()) |nextToken| {
+                return if (nextToken.type == tokenType) self.next() else null;
             } else return null;
         }
 
-        pub fn peek(self: Self) ?Token {
-            return if (self.index + 1 < self.container.len) self.container[self.index + 1] else null;
+        pub fn peekNext(self: Self) ?Token {
+            return if (self.index < self.container.len) self.container[self.index] else null;
+        }
+
+        pub fn peekPrev(self: Self) ?Token {
+            return if (self.index > 1) self.container[self.index - 2] else null;
         }
 
         pub fn rest(self: Self) []Token {
@@ -51,6 +53,10 @@ pub fn TokenIterator(Token: type) type {
 
         pub fn container(self: Self) []Token {
             return self.container;
+        }
+
+        pub fn position(self: Self) u64 {
+            return if (self.index == 0) 0 else self.index - 1;
         }
     };
 }

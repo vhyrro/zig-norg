@@ -3,7 +3,7 @@ const testing = std.testing;
 const utils = @import("utils.zig");
 
 const tokenizer = @import("tokenizer.zig");
-const TokenIterator = @import("iterator.zig").TokenIterator(tokenizer.SimpleToken);
+const TokenIterator = @import("token_iterator.zig").TokenIterator(tokenizer.SimpleToken, tokenizer.SimpleTokenType);
 
 pub const Token = struct {
     range: struct {
@@ -55,22 +55,22 @@ pub const NeedsMoreData = error{UnclosedLink};
 
 // ---------------------------------------------------------------------------------------------------------------
 
-fn parseConsecutiveTokens(iterator: TokenIterator, targetType: tokenizer.SimpleTokenType) Token {
-    const start = iterator.index;
+fn parseConsecutiveTokens(iterator: *TokenIterator, targetType: tokenizer.SimpleTokenType) Token {
+    const start = iterator.position();
 
     while (iterator.nextWithType(targetType)) |_| {}
 
     return .{
         .range = .{
             .start = start,
-            .end = iterator.index - start + 1,
+            .end = start + (iterator.position() - start) + 1,
         },
 
         .type = undefined,
     };
 }
 
-fn parseWord(iterator: TokenIterator, input: []const u8) Token {
+fn parseWord(iterator: *TokenIterator, input: []const u8) Token {
     var token = parseConsecutiveTokens(iterator, .Character);
 
     token.type = .{
@@ -80,23 +80,23 @@ fn parseWord(iterator: TokenIterator, input: []const u8) Token {
     return token;
 }
 
-fn parseWhitespace(iterator: TokenIterator) Token {
+fn parseWhitespace(iterator: *TokenIterator) Token {
     var token = parseConsecutiveTokens(iterator, .Space);
     token.type = .Space;
 
     return token;
 }
 
-fn oneOrTwo(iterator: TokenIterator, oneType: TokenType, twoType: TokenType) Token {
-    const begin = iterator.index;
-    const typeToMatch = iterator.current().type;
+fn oneOrTwo(iterator: *TokenIterator, oneType: TokenType, twoType: TokenType) Token {
+    const begin = iterator.position();
+    const typeToMatch = iterator.current().?.type;
 
     const has_second_match: bool = if (iterator.nextWithType(typeToMatch)) |_| true else false;
 
     return .{
         .range = .{
             .start = begin,
-            .end = iterator.index - begin + 1,
+            .end = begin + (iterator.position() - begin) + 1,
         },
 
         .type = if (has_second_match) twoType else oneType,
@@ -122,36 +122,28 @@ pub fn parse(alloc: *std.heap.ArenaAllocator, input: []const u8, simpleTokens: [
 
     var iterator = TokenIterator.from(simpleTokens);
 
+    // TODO: Clear attached mods if a ParagraphBreak was matched
     while (iterator.next()) |current| {
         try tokens.append(switch (current.type) {
-            // TODO(vhyrro): Instead of passing &i create a custom iterator class that implements
-            // peek() functions etc.
-            .Character => parseWord(iterator, input),
-            .Space => parseWhitespace(iterator),
-            .Newline => oneOrTwo(iterator, .SoftBreak, .ParagraphBreak),
+            .Character => parseWord(&iterator, input),
+            .Space => parseWhitespace(&iterator),
+            .Newline => oneOrTwo(&iterator, .SoftBreak, .ParagraphBreak),
             .Special => b: {
                 // Check for attached modifiers
-                const can_be_attached_modifier: bool = cond: {
-                    if (i + 1 < simpleTokens.len)
-                        break :cond simpleTokens[i + 1].char != current.char
-                    else
-                        break :cond true;
-                };
+                const can_be_attached_modifier: bool = if (iterator.peekNext()) |next| next.char != current.char else true;
 
                 const can_be_opening_modifier: bool = cond: {
-                    if (i == 0)
-                        break :cond true
-                    else {
-                        const prev = simpleTokens[i - 1];
-                        break :cond (prev.type == .Space or prev.type == .Newline or utils.isPunctuation(prev.char)) and (i + 1 < simpleTokens.len and simpleTokens[i + 1].type == .Character);
-                    }
+                    const prev = iterator.peekPrev() orelse break :cond true;
+                    const next = iterator.peekNext() orelse break :cond true;
+
+                    break :cond (prev.type == .Space or prev.type == .Newline or utils.isPunctuation(prev.char)) and next.type == .Character;
                 };
 
                 const can_be_closing_modifier: bool = cond: {
-                    if (i + 1 < simpleTokens.len) {
-                        const next = simpleTokens[i + 1];
-                        break :cond (next.type == .Space or next.type == .Newline or utils.isPunctuation(next.char)) and (i > 0 and simpleTokens[i - 1].type == .Character);
-                    } else break :cond true;
+                    const prev = iterator.peekPrev() orelse break :cond true;
+                    const next = iterator.peekNext() orelse break :cond true;
+
+                    break :cond (next.type == .Space or next.type == .Newline or utils.isPunctuation(next.char)) and prev.type == .Character;
                 };
 
                 var unclosedAttachedMods = (try unclosedAttachedModifierMap.getOrPutValue(current.char, std.ArrayList(u64).init(allocator))).value_ptr;
@@ -161,8 +153,8 @@ pub fn parse(alloc: *std.heap.ArenaAllocator, input: []const u8, simpleTokens: [
 
                     break :b Token{
                         .range = .{
-                            .start = start,
-                            .end = start + 1,
+                            .start = iterator.position(),
+                            .end = iterator.position() + 1,
                         },
                         .type = .{
                             .AttachedModifier = .{
@@ -177,8 +169,8 @@ pub fn parse(alloc: *std.heap.ArenaAllocator, input: []const u8, simpleTokens: [
 
                     break :b Token{
                         .range = .{
-                            .start = start,
-                            .end = start + 1,
+                            .start = iterator.position(),
+                            .end = iterator.position() + 1,
                         },
 
                         .type = .{
@@ -203,12 +195,12 @@ pub fn parse(alloc: *std.heap.ArenaAllocator, input: []const u8, simpleTokens: [
                         else => {
                             break :b Token{
                                 .range = .{
-                                    .start = start,
-                                    .end = start + 1,
+                                    .start = iterator.position(),
+                                    .end = iterator.position() + 1,
                                 },
 
                                 .type = .{
-                                    .Word = input[start .. start + 1],
+                                    .Word = input[iterator.position() .. iterator.position() + 1],
                                 },
                             };
                         },
@@ -233,15 +225,29 @@ fn testInput(input: []const u8, comptime size: comptime_int, comptime expected: 
 
     var tokens = try parse(&arena, input, simpleTokens);
 
+    if (tokens.len < size) {
+        std.debug.print("Not enough tokens were produced! :: {any}\n", .{tokens});
+        return error.TestingUnexpectedResult;
+    }
+
     var i: u64 = 0;
 
     while (i < size) : (i += 1) {
         var in = tokens[i];
         var exp = expected[i];
 
-        try testing.expect(in.range.start == exp.range.start);
-        try testing.expect(in.range.end == exp.range.end);
-        try testing.expect(@typeName(@TypeOf(in.type)) == @typeName(@TypeOf(exp.type)));
+        testing.expect(in.range.start == exp.range.start) catch |err| {
+            std.debug.print("Start ranges do not match at index {}. Expected {}, got {}.\n", .{ i, exp.range.start, in.range.start });
+            return err;
+        };
+
+        testing.expect(in.range.end == exp.range.end) catch |err| {
+            std.debug.print("End ranges do not match at index {}. Expected {}, got {}.\n", .{ i, exp.range.end, in.range.end });
+            return err;
+        };
+
+        // TODO: Fix
+        // try testing.expect(@typeName(@TypeOf(in.type)) == @typeName(@TypeOf(exp.type)));
     }
 }
 
