@@ -103,6 +103,78 @@ fn oneOrTwo(iterator: *TokenIterator, oneType: TokenType, twoType: TokenType) To
     };
 }
 
+fn parseNewline(iterator: *TokenIterator, unclosedAttachedModifierMap: *std.AutoHashMap(u8, std.ArrayList(u64))) Token {
+    const result = oneOrTwo(iterator, .SoftBreak, .ParagraphBreak);
+
+    // If we parsed a paragraph break then clear all attached modifiers
+    if (result.type == .ParagraphBreak) {
+        var iter = unclosedAttachedModifierMap.iterator();
+
+        while (iter.next()) |kv|
+            kv.value_ptr.clearAndFree();
+    }
+
+    return result;
+}
+
+fn parseAttachedModifier(iterator: *TokenIterator, unclosedAttachedModifierMap: *std.AutoHashMap(u8, std.ArrayList(u64)), items: []Token) !?Token {
+    const current = iterator.current().?;
+
+    // Check for attached modifiers
+    const can_be_attached_modifier: bool = if (iterator.peekNext()) |next| next.char != current.char else true;
+
+    const can_be_opening_modifier: bool = cond: {
+        const prev = iterator.peekPrev() orelse break :cond true;
+        const next = iterator.peekNext() orelse break :cond true;
+
+        break :cond (prev.type == .Space or prev.type == .Newline or utils.isPunctuation(prev.char)) and next.type == .Character;
+    };
+
+    const can_be_closing_modifier: bool = cond: {
+        const prev = iterator.peekPrev() orelse break :cond true;
+        const next = iterator.peekNext() orelse break :cond true;
+
+        break :cond (next.type == .Space or next.type == .Newline or utils.isPunctuation(next.char)) and prev.type == .Character;
+    };
+
+    var unclosedAttachedMods = (try unclosedAttachedModifierMap.getOrPutValue(current.char, std.ArrayList(u64).init(unclosedAttachedModifierMap.allocator))).value_ptr;
+
+    if (can_be_attached_modifier and can_be_opening_modifier) {
+        try unclosedAttachedMods.append(items.len);
+
+        return .{
+            .range = .{
+                .start = iterator.position(),
+                .end = iterator.position() + 1,
+            },
+            .type = .{
+                .AttachedModifier = .{
+                    .isOpening = true,
+                    .closingModifierIndex = null,
+                    .char = current.char,
+                },
+            },
+        };
+    } else if (can_be_attached_modifier and can_be_closing_modifier) {
+        const attachedModifierIndex = if (unclosedAttachedMods.items.len > 0) unclosedAttachedMods.orderedRemove(0) else null;
+
+        return .{
+            .range = .{
+                .start = iterator.position(),
+                .end = iterator.position() + 1,
+            },
+
+            .type = .{
+                .AttachedModifier = .{
+                    .isOpening = false,
+                    .closingModifierIndex = attachedModifierIndex,
+                    .char = current.char,
+                },
+            },
+        };
+    } else return null;
+}
+
 pub fn parse(alloc: *std.heap.ArenaAllocator, input: []const u8, simpleTokens: []tokenizer.SimpleToken) ![]Token {
     var allocator = alloc.allocator();
 
@@ -122,95 +194,41 @@ pub fn parse(alloc: *std.heap.ArenaAllocator, input: []const u8, simpleTokens: [
 
     var iterator = TokenIterator.from(simpleTokens);
 
-    // TODO: Clear attached mods if a ParagraphBreak was matched
     while (iterator.next()) |current| {
         try tokens.append(switch (current.type) {
             .Character => parseWord(&iterator, input),
             .Space => parseWhitespace(&iterator),
-            .Newline => oneOrTwo(&iterator, .SoftBreak, .ParagraphBreak),
-            .Special => b: {
-                // Check for attached modifiers
-                const can_be_attached_modifier: bool = if (iterator.peekNext()) |next| next.char != current.char else true;
+            .Newline => parseNewline(&iterator, &unclosedAttachedModifierMap),
+            .Special => try parseAttachedModifier(&iterator, &unclosedAttachedModifierMap, tokens.items) orelse b: {
+                // If the thing cannot be an attached mod then try merge it with the previous word
+                // or create a new Word object
+                var prev = &tokens.items[tokens.items.len - 1];
 
-                const can_be_opening_modifier: bool = cond: {
-                    const prev = iterator.peekPrev() orelse break :cond true;
-                    const next = iterator.peekNext() orelse break :cond true;
-
-                    break :cond (prev.type == .Space or prev.type == .Newline or utils.isPunctuation(prev.char)) and next.type == .Character;
-                };
-
-                const can_be_closing_modifier: bool = cond: {
-                    const prev = iterator.peekPrev() orelse break :cond true;
-                    const next = iterator.peekNext() orelse break :cond true;
-
-                    break :cond (next.type == .Space or next.type == .Newline or utils.isPunctuation(next.char)) and prev.type == .Character;
-                };
-
-                var unclosedAttachedMods = (try unclosedAttachedModifierMap.getOrPutValue(current.char, std.ArrayList(u64).init(allocator))).value_ptr;
-
-                if (can_be_attached_modifier and can_be_opening_modifier) {
-                    try unclosedAttachedMods.append(tokens.items.len);
-
-                    break :b Token{
-                        .range = .{
-                            .start = iterator.position(),
-                            .end = iterator.position() + 1,
-                        },
-                        .type = .{
-                            .AttachedModifier = .{
-                                .isOpening = true,
-                                .closingModifierIndex = null,
-                                .char = current.char,
+                switch (prev.type) {
+                    .Word => |*word| {
+                        prev.range.end += 1;
+                        word.* = input[prev.range.start..prev.range.end];
+                        continue;
+                    },
+                    else => {
+                        break :b Token{
+                            .range = .{
+                                .start = iterator.position(),
+                                .end = iterator.position() + 1,
                             },
-                        },
-                    };
-                } else if (can_be_attached_modifier and can_be_closing_modifier) {
-                    const attachedModifierIndex = if (unclosedAttachedMods.items.len > 0) unclosedAttachedMods.orderedRemove(0) else null;
 
-                    break :b Token{
-                        .range = .{
-                            .start = iterator.position(),
-                            .end = iterator.position() + 1,
-                        },
-
-                        .type = .{
-                            .AttachedModifier = .{
-                                .isOpening = false,
-                                .closingModifierIndex = attachedModifierIndex,
-                                .char = current.char,
+                            .type = .{
+                                .Word = input[iterator.position() .. iterator.position() + 1],
                             },
-                        },
-                    };
-                } else { // TODO: verify if this is even needed
-                    // If the thing cannot be an attached mod then try merge it with the previous word
-                    // or create a new Word object
-                    var prev = &tokens.items[tokens.items.len - 1];
-
-                    switch (prev.type) {
-                        .Word => |*word| {
-                            prev.range.end += 1;
-                            word.* = input[prev.range.start..prev.range.end];
-                            continue;
-                        },
-                        else => {
-                            break :b Token{
-                                .range = .{
-                                    .start = iterator.position(),
-                                    .end = iterator.position() + 1,
-                                },
-
-                                .type = .{
-                                    .Word = input[iterator.position() .. iterator.position() + 1],
-                                },
-                            };
-                        },
-                    }
+                        };
+                    },
                 }
             },
 
             else => continue,
         });
     }
+
     return tokens.toOwnedSlice();
 }
 
@@ -321,3 +339,5 @@ test "Parse multi-line text" {
         },
     });
 }
+
+// TODO: Tests for attached modifiers
