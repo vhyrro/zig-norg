@@ -243,30 +243,15 @@ pub fn parse(alloc: *std.heap.ArenaAllocator, input: []const u8, simpleTokens: [
             .Special =>
             parseStructuralDetachedModifier(&iterator)
             orelse try parseAttachedModifier(&iterator, &unclosedAttachedModifierMap, tokens.items)
-            orelse b: {
-                // If the thing cannot be an attached mod then try merge it with the previous word
-                // or create a new Word object
-                var prev = &tokens.items[tokens.items.len - 1];
+            orelse Token{
+                .range = .{
+                    .start = iterator.position(),
+                    .end = iterator.position() + 1,
+                },
 
-                switch (prev.type) {
-                    .Word => |*word| {
-                        prev.range.end += 1;
-                        word.* = input[prev.range.start..prev.range.end];
-                        continue;
-                    },
-                    else => {
-                        break :b Token{
-                            .range = .{
-                                .start = iterator.position(),
-                                .end = iterator.position() + 1,
-                            },
-
-                            .type = .{
-                                .Word = input[iterator.position() .. iterator.position() + 1],
-                            },
-                        };
-                    },
-                }
+                .type = .{
+                    .Word = input[iterator.position() .. iterator.position() + 1],
+                },
             },
 
             else => continue,
