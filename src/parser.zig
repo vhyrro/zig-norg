@@ -298,8 +298,11 @@ fn testInput(input: []const u8, comptime size: comptime_int, comptime expected: 
             return err;
         };
 
-        // TODO: Fix
-        // try testing.expect(@typeName(@TypeOf(in.type)) == @typeName(@TypeOf(exp.type)));
+        // TODO: Why is this erroring on two identical strings?
+        // testing.expectEqual(in.type, exp.type) catch |err| {
+        //     std.debug.print("Structs do not match at index {}. Expected {any}, got {any}.\n", .{ i, exp.type, in.type });
+        //     return err;
+        // };
     }
 }
 
@@ -351,7 +354,7 @@ test "Parse multi-line text" {
         word(0, 5, "Hello"),
         t(5, 6, .SoftBreak),
         word(6, 11, "world"),
-        attMod(11, false, '!'),
+        attMod(11, true, '!'),
     });
 }
 
@@ -372,6 +375,62 @@ test "Headings" {
         word(3, 8, "Hello"),
         space(8, 9),
         word(9, 14, "world"),
+    });
+}
+
+test "Headings after paragraphs" {
+    const input =
+        \\Some text!
+        \\* Hello World
+        \\  Content.
+    ;
+
+    try testInput(input, 13, [13]Token{
+        word(0, 4, "Some"),
+        space(4, 5),
+        word(5, 9, "text"),
+        attMod(9, true, '!'),
+        t(10, 11, .SoftBreak),
+        t(11, 12, .{
+            .StructuralDetachedModifier = .{
+                .type = .Heading,
+                .level = 1,
+            },
+        }),
+        space(12, 13),
+        word(13, 18, "Hello"),
+        space(18, 19),
+        word(19, 24, "world"),
+        t(24, 25, .SoftBreak),
+        space(25, 27),
+        word(27, 35, "Content."),
+    });
+}
+
+test "Multi-level headings" {
+    const input =
+        \\** Nested
+        \\******** Loooong
+    ;
+
+    try testInput(input, 7, [7]Token{
+        t(0, 2, .{
+            .StructuralDetachedModifier = .{
+                .type = .Heading,
+                .level = 2,
+            },
+        }),
+        space(2, 3),
+        word(3, 9, "Nested"),
+        t(9, 10, .SoftBreak),
+        t(10, 18, .{
+            .StructuralDetachedModifier = .{
+                .type = .Heading,
+                .level = 8,
+            },
+        }),
+        space(18, 19),
+        word(19, 26, "Loooong"),
     });
 }
 
