@@ -180,6 +180,8 @@ fn parseStructuralDetachedModifier(iterator: *TokenIterator) ?Token {
     if (!iterator.isNewLine)
         return null;
 
+    // TODO: At some distant point in the future prevent backtracking from this restore point
+    // and implement an O(n) recovery system
     const restorePoint = iterator.index;
 
     const currentType = iterator.current().?.type;
@@ -194,19 +196,24 @@ fn parseStructuralDetachedModifier(iterator: *TokenIterator) ?Token {
         return null;
     };
 
-    return if (next.type == .Space) .{
-        .range = .{
-            .start = if (restorePoint == 0) restorePoint else restorePoint - 1,
-            .end = iterator.index,
-        },
-
-        .type = .{
-            .StructuralDetachedModifier = .{
-                .type = .Heading, // TODO: Don't hardcode this
-                .level = level,
+    if (next.type == .Space) {
+        return .{
+            .range = .{
+                .start = if (restorePoint == 0) restorePoint else restorePoint - 1,
+                    .end = iterator.index,
             },
-        },
-    } else null;
+
+            .type = .{
+                .StructuralDetachedModifier = .{
+                    .type = .Heading, // TODO: Don't hardcode this
+                    .level = level,
+                },
+            },
+        }
+    } else {
+        iterator.index = restorePoint;
+        return null;
+    };
 }
 
 pub fn parse(alloc: *std.heap.ArenaAllocator, input: []const u8, simpleTokens: []tokenizer.SimpleToken) ![]Token {
@@ -233,7 +240,10 @@ pub fn parse(alloc: *std.heap.ArenaAllocator, input: []const u8, simpleTokens: [
             .Character => parseWord(&iterator, input),
             .Space => parseWhitespace(&iterator),
             .Newline => parseNewline(&iterator, &unclosedAttachedModifierMap),
-            .Special => parseStructuralDetachedModifier(&iterator) orelse try parseAttachedModifier(&iterator, &unclosedAttachedModifierMap, tokens.items) orelse b: {
+            .Special =>
+            parseStructuralDetachedModifier(&iterator)
+            orelse try parseAttachedModifier(&iterator, &unclosedAttachedModifierMap, tokens.items)
+            orelse b: {
                 // If the thing cannot be an attached mod then try merge it with the previous word
                 // or create a new Word object
                 var prev = &tokens.items[tokens.items.len - 1];
