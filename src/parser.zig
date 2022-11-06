@@ -29,10 +29,8 @@ pub const AttachedModifierType = enum {
     Spoiler,
 };
 
-pub const AttachedModifier = struct {
-    char: u8,
-    type: AttachedModifierType,
-    content: []Token,
+pub const StructuralDetachedModifierType = enum {
+    Heading,
 };
 
 pub const TokenType = union(enum) {
@@ -40,18 +38,21 @@ pub const TokenType = union(enum) {
     Space,
     SoftBreak,
     ParagraphBreak,
+    // TODO: Implement this behaviour
     Link: struct {
         type: LinkType,
-        content: []Token,
     },
     AttachedModifier: struct {
         isOpening: bool,
         closingModifierIndex: ?u64,
         char: u8,
     },
-};
 
-pub const NeedsMoreData = error{UnclosedLink};
+    StructuralDetachedModifier: struct {
+        type: StructuralDetachedModifierType,
+        level: u16,
+    },
+};
 
 // ---------------------------------------------------------------------------------------------------------------
 
@@ -175,6 +176,39 @@ fn parseAttachedModifier(iterator: *TokenIterator, unclosedAttachedModifierMap: 
     } else return null;
 }
 
+fn parseStructuralDetachedModifier(iterator: *TokenIterator) ?Token {
+    if (!iterator.isNewLine)
+        return null;
+
+    const restorePoint = iterator.index;
+
+    const currentType = iterator.current().?.type;
+
+    var level: u16 = 1;
+
+    while (iterator.nextWithType(currentType)) |_|
+        level += 1;
+
+    const next = iterator.peekNext() orelse {
+        iterator.index = restorePoint;
+        return null;
+    };
+
+    return if (next.type == .Space) .{
+        .range = .{
+            .start = if (restorePoint == 0) restorePoint else restorePoint - 1,
+            .end = iterator.index,
+        },
+
+        .type = .{
+            .StructuralDetachedModifier = .{
+                .type = .Heading, // TODO: Don't hardcode this
+                .level = level,
+            },
+        },
+    } else null;
+}
+
 pub fn parse(alloc: *std.heap.ArenaAllocator, input: []const u8, simpleTokens: []tokenizer.SimpleToken) ![]Token {
     var allocator = alloc.allocator();
 
@@ -199,7 +233,7 @@ pub fn parse(alloc: *std.heap.ArenaAllocator, input: []const u8, simpleTokens: [
             .Character => parseWord(&iterator, input),
             .Space => parseWhitespace(&iterator),
             .Newline => parseNewline(&iterator, &unclosedAttachedModifierMap),
-            .Special => try parseAttachedModifier(&iterator, &unclosedAttachedModifierMap, tokens.items) orelse b: {
+            .Special => parseStructuralDetachedModifier(&iterator) orelse try parseAttachedModifier(&iterator, &unclosedAttachedModifierMap, tokens.items) orelse b: {
                 // If the thing cannot be an attached mod then try merge it with the previous word
                 // or create a new Word object
                 var prev = &tokens.items[tokens.items.len - 1];
@@ -269,26 +303,41 @@ fn testInput(input: []const u8, comptime size: comptime_int, comptime expected: 
     }
 }
 
+fn t(comptime start: u64, comptime end: u64, comptime tokenType: TokenType) Token {
+    return .{
+        .range = .{
+            .start = start,
+            .end = end,
+        },
+
+        .type = tokenType,
+    };
+}
+
+fn word(comptime start: u64, comptime end: u64, comptime content: []const u8) Token {
+    return t(start, end, .{ .Word = content });
+}
+
+fn space(comptime start: u64, comptime end: u64) Token {
+    return t(start, end, .Space);
+}
+
+fn attMod(comptime start: u64, comptime opening: bool, comptime char: u8) Token {
+    return t(start, start + 1, .{
+        .AttachedModifier = .{
+            .isOpening = opening,
+            .closingModifierIndex = null,
+            .char = char,
+        },
+    });
+}
+
 test "Parse regular sample text" {
     const input = "Hello\n\n";
 
     try testInput(input, 2, [2]Token{
-        .{
-            .range = .{
-                .start = 0,
-                .end = 5,
-            },
-            .type = .{
-                .Word = "Hello",
-            },
-        },
-        .{
-            .range = .{
-                .start = 5,
-                .end = 7,
-            },
-            .type = .ParagraphBreak,
-        },
+        word(0, 5, "Hello"),
+        t(5, 7, .ParagraphBreak),
     });
 }
 
@@ -299,44 +348,30 @@ test "Parse multi-line text" {
     ;
 
     try testInput(input, 4, [4]Token{
-        .{
-            .range = .{
-                .start = 0,
-                .end = 5,
+        word(0, 5, "Hello"),
+        t(5, 6, .SoftBreak),
+        word(6, 11, "world"),
+        attMod(11, false, '!'),
+    });
+}
+
+test "Headings" {
+    const input =
+        \\ * Hello World
+    ;
+
+    try testInput(input, 6, [6]Token{
+        space(0, 1),
+        t(1, 2, .{
+            .StructuralDetachedModifier = .{
+                .type = .Heading,
+                .level = 1,
             },
-            .type = .{
-                .Word = "Hello",
-            },
-        },
-        .{
-            .range = .{
-                .start = 5,
-                .end = 6,
-            },
-            .type = .SoftBreak,
-        },
-        .{
-            .range = .{
-                .start = 6,
-                .end = 11,
-            },
-            .type = .{
-                .Word = "world",
-            },
-        },
-        .{
-            .range = .{
-                .start = 11,
-                .end = 12,
-            },
-            .type = .{
-                .AttachedModifier = .{
-                    .isOpening = false,
-                    .closingModifierIndex = null,
-                    .char = '!',
-                },
-            },
-        },
+        }),
+        space(2, 3),
+        word(3, 8, "Hello"),
+        space(8, 9),
+        word(9, 14, "world"),
     });
 }
 

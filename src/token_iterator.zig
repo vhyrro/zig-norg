@@ -8,6 +8,7 @@ pub fn TokenIterator(comptime Token: type, comptime TokenType: type) type {
     return struct {
         container: []Token,
         index: u64,
+        isNewLine: bool,
 
         const Self = @This();
 
@@ -15,6 +16,7 @@ pub fn TokenIterator(comptime Token: type, comptime TokenType: type) type {
             return .{
                 .container = tokens,
                 .index = 0,
+                .isNewLine = true,
             };
         }
 
@@ -30,7 +32,10 @@ pub fn TokenIterator(comptime Token: type, comptime TokenType: type) type {
                 return null;
 
             defer self.index += 1;
-            return self.container[self.index];
+
+            const nextValue = self.container[self.index];
+            self.isNewLine = nextValue.type != .Newline and !(self.isNewLine and nextValue.type == .Space);
+            return nextValue;
         }
 
         pub fn nextWithType(self: *Self, tokenType: TokenType) ?Token {
