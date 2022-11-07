@@ -498,4 +498,19 @@ test "Escape Sequences" {
     });
 }
 
+test "\\ Trailing Modifier" {
+    const input =
+        \\Single sen\
+        \\tence.
+    ;
+
+    try testInput(input, 5, [5]Token{
+        word(0, 6, "Single"),
+        space(6, 7),
+        word(7, 10, "sen"),
+        esc(10, '\n'),
+        word(12, 18, "tence."),
+    });
+}
+
 // TODO: Tests for attached modifiers
