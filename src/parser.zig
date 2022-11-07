@@ -132,13 +132,13 @@ fn parseAttachedModifier(iterator: *TokenIterator, unclosedAttachedModifierMap: 
 
     const can_be_opening_modifier: bool = cond: {
         const prev = iterator.peekPrev() orelse break :cond true;
-        const next = iterator.peekNext() orelse break :cond true;
+        const next = iterator.peekNext() orelse break :cond false;
 
         break :cond (prev.type == .Space or prev.type == .Newline or utils.isPunctuation(prev.char)) and next.type == .Character;
     };
 
     const can_be_closing_modifier: bool = cond: {
-        const prev = iterator.peekPrev() orelse break :cond true;
+        const prev = iterator.peekPrev() orelse break :cond false;
         const next = iterator.peekNext() orelse break :cond true;
 
         break :cond (next.type == .Space or next.type == .Newline or utils.isPunctuation(next.char)) and prev.type == .Character;
