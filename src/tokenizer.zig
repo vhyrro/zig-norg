@@ -6,6 +6,7 @@ pub const SimpleTokenType = enum {
     Space,
     Newline,
     Special,
+    Escape,
     LinkOpen,
     LinkClose,
 };
@@ -35,6 +36,7 @@ pub fn tokenize(allocator: std.mem.Allocator, input: []const u8) std.mem.Allocat
                 '%',
                 '!',
                 => .Special,
+                '\\' => .Escape,
                 '{' => .LinkOpen,
                 '}' => .LinkClose,
                 else => .Character,

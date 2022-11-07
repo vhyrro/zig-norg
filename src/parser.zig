@@ -33,6 +33,11 @@ pub const StructuralDetachedModifierType = enum {
     Heading,
 };
 
+pub const EscapeSequenceType = union(enum) {
+    Regular: u8,
+    TrailingModifier,
+};
+
 pub const TokenType = union(enum) {
     Word: []const u8,
     Space,
@@ -52,6 +57,7 @@ pub const TokenType = union(enum) {
         type: StructuralDetachedModifierType,
         level: u16,
     },
+    EscapeSequence: EscapeSequenceType,
 };
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -209,12 +215,34 @@ fn parseStructuralDetachedModifier(iterator: *TokenIterator) ?Token {
                     .level = level,
                 },
             },
-        }
+        };
     } else {
         iterator.index = restorePoint;
         return null;
+    }
+}
+
+fn parseEscapeSequence(iterator: *TokenIterator) !Token {
+    const start = iterator.position();
+    const next = iterator.next() orelse return NeedsMoreData.MissingCharAfterBackslash;
+
+    return .{
+        .range = .{
+            .start = start,
+            .end = iterator.position() + 1,
+        },
+
+        .type = .{
+            .EscapeSequence = if (next.type == .Newline) .TrailingModifier else .{
+                .Regular = next.char,
+            },
+        },
     };
 }
+
+pub const NeedsMoreData = error {
+    MissingCharAfterBackslash
+};
 
 pub fn parse(alloc: *std.heap.ArenaAllocator, input: []const u8, simpleTokens: []tokenizer.SimpleToken) ![]Token {
     var allocator = alloc.allocator();
@@ -240,18 +268,28 @@ pub fn parse(alloc: *std.heap.ArenaAllocator, input: []const u8, simpleTokens: [
             .Character => parseWord(&iterator, input),
             .Space => parseWhitespace(&iterator),
             .Newline => parseNewline(&iterator, &unclosedAttachedModifierMap),
+            .Escape => try parseEscapeSequence(&iterator),
             .Special =>
             parseStructuralDetachedModifier(&iterator)
             orelse try parseAttachedModifier(&iterator, &unclosedAttachedModifierMap, tokens.items)
-            orelse Token{
-                .range = .{
-                    .start = iterator.position(),
-                    .end = iterator.position() + 1,
-                },
+            orelse b: {
+                const currentChar = iterator.current().?.char;
+                const start = iterator.position();
 
-                .type = .{
-                    .Word = input[iterator.position() .. iterator.position() + 1],
-                },
+                while (iterator.nextWithChar(currentChar)) |_| {}
+
+                const end = start + (iterator.position() - start) + 1;
+
+                break :b Token{
+                    .range = .{
+                        .start = start,
+                        .end = end,
+                    },
+
+                    .type = .{
+                        .Word = input[start .. end],
+                    },
+                };
             },
 
             else => continue,
@@ -284,12 +322,12 @@ fn testInput(input: []const u8, comptime size: comptime_int, comptime expected: 
         var exp = expected[i];
 
         testing.expect(in.range.start == exp.range.start) catch |err| {
-            std.debug.print("Start ranges do not match at index {}. Expected {}, got {}.\n", .{ i, exp.range.start, in.range.start });
+            std.debug.print("Start ranges do not match at index {}. Expected {}, got {}.\nReceived token: {any}\n", .{ i, exp.range.start, in.range.start, in });
             return err;
         };
 
         testing.expect(in.range.end == exp.range.end) catch |err| {
-            std.debug.print("End ranges do not match at index {}. Expected {}, got {}.\n", .{ i, exp.range.end, in.range.end });
+            std.debug.print("End ranges do not match at index {}. Expected {}, got {}.\nReceived token: {any}\n", .{ i, exp.range.end, in.range.end, in });
             return err;
         };
 
@@ -326,6 +364,14 @@ fn attMod(comptime start: u64, comptime opening: bool, comptime char: u8) Token 
             .isOpening = opening,
             .closingModifierIndex = null,
             .char = char,
+        },
+    });
+}
+
+fn esc(comptime start: u64, comptime escapedChar: u8) Token {
+    return t(start, start + 2, .{
+        .EscapeSequence = if (escapedChar == '\n') .TrailingModifier else .{
+            .Regular = escapedChar,
         },
     });
 }
@@ -426,6 +472,29 @@ test "Multi-level headings" {
         }),
         space(18, 19),
         word(19, 26, "Loooong"),
+    });
+}
+
+test "Escape Sequences" {
+    const input =
+        \\Some \text.
+        \\\* NotAHeading
+        \\***\ AlsoNotAHeading
+    ;
+
+    try testInput(input, 12, [12]Token{
+        word(0, 4, "Some"),
+        space(4, 5),
+        esc(5, 't'),
+        word(7, 11, "ext."),
+        t(11, 12, .SoftBreak),
+        esc(12, '*'),
+        space(14, 15),
+        word(15, 26, "NotAHeading"),
+        t(26, 27, .SoftBreak),
+        word(27, 30, "***"),
+        esc(30, ' '),
+        word(32, 47, "AlsoNotAHeading"),
     });
 }
 

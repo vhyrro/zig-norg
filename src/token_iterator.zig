@@ -44,6 +44,12 @@ pub fn TokenIterator(comptime Token: type, comptime TokenType: type) type {
             } else return null;
         }
 
+        pub fn nextWithChar(self: *Self, char: u8) ?Token {
+            if (self.peekNext()) |nextToken| {
+                return if (nextToken.char == char) self.next() else null;
+            } else return null;
+        }
+
         pub fn peekNext(self: Self) ?Token {
             return if (self.index < self.container.len) self.container[self.index] else null;
         }
