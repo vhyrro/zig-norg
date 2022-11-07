@@ -1,6 +1,9 @@
 # A Zig parser for the `.norg` file format
 
 See also [https://github.com/max397574/rust-norg](https://github.com/max397574/rust-norg), aka the rust version.
+The great thing about Norg is that the more parsers the merrier - parsers
+cannot create their own dialects of Norg, as Norg is a single established ruleset.
+Both of these parsers are in active development.
 
 
 ## Why?
