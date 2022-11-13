@@ -244,22 +244,34 @@ pub const NeedsMoreData = error {
     MissingCharAfterBackslash
 };
 
+const State = struct {
+    // A hashmap of a character -> indexes into the simpleTokens slice
+    unclosedAttachedModifierMap: std.AutoHashMap(u8, std.ArrayList(u64)),
+
+    pub fn init(allocator: std.mem.Allocator) State {
+        return .{
+            .unclosedAttachedModifierMap = std.AutoHashMap(u8, std.ArrayList(u64)).init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *State) void {
+        var iter = self.unclosedAttachedModifierMap.iterator();
+
+        while (iter.next()) |kv|
+            kv.value_ptr.deinit();
+
+        self.unclosedAttachedModifierMap.deinit();
+    }
+};
+
 pub fn parse(alloc: *std.heap.ArenaAllocator, input: []const u8, simpleTokens: []tokenizer.SimpleToken) ![]Token {
     var allocator = alloc.allocator();
 
     var tokens = std.ArrayList(Token).init(allocator);
     errdefer tokens.deinit();
 
-    // A hashmap of a character -> indexes into the simpleTokens slice
-    var unclosedAttachedModifierMap = std.AutoHashMap(u8, std.ArrayList(u64)).init(allocator);
-    defer {
-        var iter = unclosedAttachedModifierMap.iterator();
-
-        while (iter.next()) |kv|
-            kv.value_ptr.deinit();
-
-        unclosedAttachedModifierMap.deinit();
-    }
+    var state = State.init(allocator);
+    defer state.deinit();
 
     var iterator = TokenIterator.from(simpleTokens);
 
@@ -267,11 +279,11 @@ pub fn parse(alloc: *std.heap.ArenaAllocator, input: []const u8, simpleTokens: [
         try tokens.append(switch (current.type) {
             .Character => parseWord(&iterator, input),
             .Space => parseWhitespace(&iterator),
-            .Newline => parseNewline(&iterator, &unclosedAttachedModifierMap),
+            .Newline => parseNewline(&iterator, &state.unclosedAttachedModifierMap),
             .Escape => try parseEscapeSequence(&iterator),
             .Special =>
             parseStructuralDetachedModifier(&iterator)
-            orelse try parseAttachedModifier(&iterator, &unclosedAttachedModifierMap, tokens.items)
+            orelse try parseAttachedModifier(&iterator, &state.unclosedAttachedModifierMap, tokens.items)
             orelse b: {
                 const currentChar = iterator.current().?.char;
                 const start = iterator.position();
